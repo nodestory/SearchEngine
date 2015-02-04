@@ -18,10 +18,10 @@ class ESPipeline(object):
         snippets = [s.lower() for s in snippets]
 
         doc = {
-            "titles": item['titles'],
-            "snippets": snippets
+            'query': item['query'],
+            'titles': item['titles'],
+            'snippets': snippets
         }
-        self.es.index(index='keyword-expansion', doc_type='search-results',
-                        id=item['query'], body=doc)
+        self.es.index(index='keyword-expansion', doc_type='descriptions', body=doc)
 
         return item

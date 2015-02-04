@@ -12,9 +12,9 @@ class GoogleSearchSpider(CrawlSpider):
     def __init__(self, *args, **kwargs): 
         super(CrawlSpider, self).__init__(*args, **kwargs)
 
-        # self.query = "好初"
+        # self.query = "藝之鄉特產"
         # self.url = 'http://www.google.com.tw/search?q=%s&oe=utf-8&gws_rd=ssl' % self.query
-        # self.start_urls = ['http://www.google.com.tw/search?q=%s&oe=utf-8&gws_rd=ssl' % self.query]
+        # self.start_urls = ['http://www.google.com.tw/search?q="%s"&oe=utf-8&gws_rd=ssl' % self.query]
 
     def start_requests(self):
         es = Elasticsearch(ES_NODES)
@@ -50,32 +50,47 @@ class GoogleSearchSpider(CrawlSpider):
             }
           }
         }
-        resp = es.search(index='tw-textsearch', doc_type='yp', body=query_dsl,
+        resp = es.search(index='tw-textsearch', doc_type='yp',
                             search_type='scan', scroll='10m', 
-                            fields='name', size=15)
+                            fields='name', size=1)
         _scroll_id = resp['_scroll_id']
-        resp = es.scroll(scroll_id=resp['_scroll_id'], scroll='1m')
+        resp = es.scroll(scroll_id=resp['_scroll_id'], scroll='10m')
         hits = resp['hits']['hits']
         while hits:
             names = [hit['fields']['name'][0] for hit in hits]
             for name in names:
-              if es.get(index='keyword-expansion', doc_type='search-results',id=name)['found']:
+              search_dsl = {"query": {"term": {"query": {"value": name}}}}
+              resp = es.search(index='keyword-expansion', doc_type='descriptions', body=search_dsl)
+              if len(resp['hits']['hits']) > 0:
                 continue
-                
-              url = 'http://www.google.com.tw/search?q=%s&oe=utf-8&gws_rd=ssl' % name
-              yield Request(url, callback=self.parse, meta={"query": name})
+              else:
+                url = 'http://www.google.com.tw/search?q="%s"&oe=utf-8&gws_rd=ssl' % name
+                yield Request(url, callback=self.parse, meta={"query": name})
 
-            resp = es.scroll(scroll_id=resp['_scroll_id'], scroll='1m')
+            resp = es.scroll(scroll_id=resp['_scroll_id'], scroll='10m')
             hits = resp['hits']['hits']
-
 
     def parse(self, response):
         result = GoogleResultItem()
         result['query'] = response.meta['query']
 
-        titles = []
-        snippets = []
-        for sel in response.xpath('//li[@class="g"]/div'):
+        main_title = ''
+        main_snippet = ''
+        main_result = response.xpath('//*[@id="rso"]/li/div')
+        if main_result:
+          if main_result.xpath('div/h3/a/text()'):
+            main_title = main_result.xpath('div/h3/a/text()').extract()[0]
+          else:
+            main_title = main_result.xpath('h3/a/text()').extract()[0]
+          if main_result.xpath('div/div/div/span/text()'):
+            main_snippet = ''.join(main_result.xpath('div/div/div/span/text()').extract())
+          else:
+            main_snippet = ''.join(main_result.xpath('div/div/span/text()').extract())
+
+        titles = [main_title]
+        snippets = [main_snippet]
+
+        for sel in response.xpath('//div[@class="srg"]/li[@class="g"]/div'):
             title = ''.join(sel.xpath('h3/a/text()').extract())
             titles.append(title)
             
@@ -84,4 +99,5 @@ class GoogleSearchSpider(CrawlSpider):
             snippets.append(snippet)
         result['titles'] = titles
         result['snippets'] = snippets
+  
         yield result
