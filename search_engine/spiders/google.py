@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import re
 from elasticsearch import Elasticsearch
 from scrapy.contrib.spiders import CrawlSpider
 from scrapy.http.request import Request
@@ -15,73 +16,63 @@ class GoogleSearchSpider(CrawlSpider):
         # self.query = "藝之鄉特產"
         # self.url = 'http://www.google.com.tw/search?q=%s&oe=utf-8&gws_rd=ssl' % self.query
         # self.start_urls = ['http://www.google.com.tw/search?q="%s"&oe=utf-8&gws_rd=ssl' % self.query]
-
+        # self.start_urls = ['http://www.google.com.tw/search?q="藝之鄉特產"&oe=utf-8&gws_rd=ssl']
+    
     def start_requests(self):
         es = Elasticsearch(ES_NODES)
 
         query_dsl = {
-          "fields": ["name"], 
           "query": {
-            "filtered": {
-              "query": {
-                "match_all": {}
-              },
-              "filter": {
-                "and": {
-                  "filters": [
-                    {
-                      "geo_distance": {
-                      "distance": "10km",
-                      "lnglat": [121.522438, 25.026662]
-                      }
-                    },
-                    {
-                      "not": {
-                        "filter": {
-                          "term": {
-                            "gid": ""
-                          }
-                          }
-                        }
-                    }
-                  ]
+            "bool": {
+              "must_not": [
+                {
+                  "match": {
+                    "name": "公司 有限公司 國民中學 國民小學 幼稚園 醫院 診所 藥局"
+                  }
                 }
-              }
+              ]
             }
           }
         }
-        resp = es.search(index='tw-textsearch', doc_type='yp',
+
+        resp = es.search(index='tw-textsearch-v1-dev', doc_type='yp', body=query_dsl,
                             search_type='scan', scroll='10m', 
                             fields='name', size=1)
         _scroll_id = resp['_scroll_id']
         resp = es.scroll(scroll_id=resp['_scroll_id'], scroll='10m')
         hits = resp['hits']['hits']
         while hits:
-            names = [hit['fields']['name'][0] for hit in hits]
-            for name in names:
-              search_dsl = {"query": {"term": {"query": {"value": name}}}}
-              resp = es.search(index='keyword-expansion', doc_type='descriptions', body=search_dsl)
-              if len(resp['hits']['hits']) > 0:
-                continue
-              else:
-                url = 'http://www.google.com.tw/search?q="%s"&oe=utf-8&gws_rd=ssl' % name
-                yield Request(url, callback=self.parse, meta={"query": name})
+          for hit in hits:
+            _id = hit['_id']
+            name = hit['fields']['name'][0]
+            search_dsl = {"query": {"term": {"query": {"value": name}}}}
+            resp = es.search(index='keyword-expansion', doc_type='results', body=search_dsl)
+            if len(resp['hits']['hits']) > 0:
+              continue
+            else:
+              name = self.normalieze(name)
+              url = 'http://www.google.com.tw/search?q="%s"&oe=utf-8&gws_rd=ssl' % name
+              yield Request(url, callback=self.parse, meta={"_id": _id, "query": name})
 
-            resp = es.scroll(scroll_id=resp['_scroll_id'], scroll='10m')
+            resp = es.scroll(scroll_id=_scroll_id, scroll='10m')
             hits = resp['hits']['hits']
+    
+    def normalieze(self, name):
+      return re.sub('[\(『「【〖〔［｛].+[\)』」】〗〕］｝】]', '', name)
 
     def parse(self, response):
         result = GoogleResultItem()
+        result['_id'] = response.meta['_id']
         result['query'] = response.meta['query']
 
         main_title = ''
         main_snippet = ''
-        main_result = response.xpath('//*[@id="rso"]/li/div')
+        main_result = response.xpath('//li[@data-hveid="33"]')
         if main_result:
-          if main_result.xpath('div/h3/a/text()'):
-            main_title = main_result.xpath('div/h3/a/text()').extract()[0]
+          if main_result.xpath('div/div/h3/a/text()'):
+            main_title = main_result.xpath('div/div/h3/a/text()').extract()[0]
           else:
-            main_title = main_result.xpath('h3/a/text()').extract()[0]
+            main_title = main_result.xpath('div/h3/a/text()').extract()[0]
           if main_result.xpath('div/div/div/span/text()'):
             main_snippet = ''.join(main_result.xpath('div/div/div/span/text()').extract())
           else:
